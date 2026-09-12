@@ -878,6 +878,7 @@ class TestLoRAMerge:
         expected_merged = original_weight + expected_lora_weight
         assert torch.allclose(merged_weight, expected_merged, atol=1e-6)
 
+    @torch.no_grad()
     def test_lora_merge_column_parallel_tp2(self):
         """Test LoRA merge with TP=2 for ColumnParallelLinear (sharded linear_in)."""
         # ColumnParallelLinear shards output dimension and linear_in's first dimension
@@ -942,6 +943,7 @@ class TestLoRAMerge:
 
         assert torch.allclose(merged_weight, expected_merged, atol=1e-6)
 
+    @torch.no_grad()
     def test_lora_merge_row_parallel_tp2(self):
         """Test LoRA merge with TP=2 for RowParallelLinear (sharded linear_out)."""
         # RowParallelLinear shards input dimension

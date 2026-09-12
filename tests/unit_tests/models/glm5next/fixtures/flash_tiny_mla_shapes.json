@@ -1,0 +1,54 @@
+{
+  "model.language_model.layers.3.self_attn.indexer.index_kpool_compress_ape": [
+    4,
+    64
+  ],
+  "model.language_model.layers.3.self_attn.indexer.index_kpool_compress_gate": [
+    64,
+    256
+  ],
+  "model.language_model.layers.3.self_attn.indexer.k_norm.bias": [
+    64
+  ],
+  "model.language_model.layers.3.self_attn.indexer.k_norm.weight": [
+    64
+  ],
+  "model.language_model.layers.3.self_attn.indexer.weights_proj.weight": [
+    4,
+    256
+  ],
+  "model.language_model.layers.3.self_attn.indexer.wk.weight": [
+    64,
+    256
+  ],
+  "model.language_model.layers.3.self_attn.indexer.wq_b.weight": [
+    256,
+    128
+  ],
+  "model.language_model.layers.3.self_attn.kv_a_layernorm.weight": [
+    64
+  ],
+  "model.language_model.layers.3.self_attn.kv_a_proj_with_mqa.weight": [
+    64,
+    256
+  ],
+  "model.language_model.layers.3.self_attn.kv_b_proj.weight": [
+    512,
+    64
+  ],
+  "model.language_model.layers.3.self_attn.o_proj.weight": [
+    256,
+    256
+  ],
+  "model.language_model.layers.3.self_attn.q_a_layernorm.weight": [
+    128
+  ],
+  "model.language_model.layers.3.self_attn.q_a_proj.weight": [
+    128,
+    256
+  ],
+  "model.language_model.layers.3.self_attn.q_b_proj.weight": [
+    256,
+    128
+  ]
+}

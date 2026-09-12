@@ -118,6 +118,7 @@ class HybridModelProvider(TransformerConfig, ModelProviderMixin[MCoreHybridModel
     logit_dtype: torch.dtype | None = None
     parallel_output: bool = True
     share_embeddings_and_output_weights: bool = False
+    scatter_embedding_sequence_parallel: bool = True
     params_dtype: torch.dtype = torch.bfloat16
     fp16: bool = False
     bf16: bool = True
@@ -328,6 +329,7 @@ class HybridModelProvider(TransformerConfig, ModelProviderMixin[MCoreHybridModel
                 **logit_dtype_kwarg(MCoreHybridModel, self.logit_dtype),
                 parallel_output=self.parallel_output,
                 share_embeddings_and_output_weights=self.share_embeddings_and_output_weights,
+                scatter_embedding_sequence_parallel=self.scatter_embedding_sequence_parallel,
                 position_embedding_type=self.position_embedding_type,
                 rotary_percent=self.rotary_percent,
                 rotary_base=self.rotary_base,

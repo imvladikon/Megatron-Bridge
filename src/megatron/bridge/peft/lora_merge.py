@@ -17,6 +17,26 @@ import torch.distributed as dist
 from megatron.core.utils import get_pg_size
 
 
+def _gather_lora_factor(value: torch.Tensor, group: dist.ProcessGroup) -> torch.Tensor:
+    """Gather a TP factor, summing every consumer's gradient back to its owner."""
+    if torch.is_grad_enabled() and value.requires_grad:
+        from torch.distributed import _functional_collectives as funcol
+
+        # Direct .weight consumers bypass the adapter's parallel linear layers.
+        # The ordinary dist collective detaches the gathered factor, silently
+        # dropping A's (column parallel) or B's (row parallel) gradient.
+        # The functional collective also works in compiled graphs and avoids
+        # a list of TP buffers followed by another concatenation allocation.
+        gather = getattr(funcol, "all_gather_single_autograd", None)
+        if gather is None:
+            gather = funcol.all_gather_tensor_autograd
+        return gather(value.contiguous(), gather_dim=0, group=group)
+
+    parts = [torch.empty_like(value) for _ in range(get_pg_size(group))]
+    dist.all_gather(parts, value.contiguous(), group=group)
+    return torch.cat(parts, dim=0)
+
+
 class LoRAMerge:
     """
     Tensor helper for merging LoRA adapter weights into base weights.
@@ -70,15 +90,11 @@ class LoRAMerge:
             return base_weight + lora_weight
 
         if linear_in.shape[0] * tp_size == dim and linear_out.shape[1] == dim:
-            linear_in_list = [torch.empty_like(linear_in) for _ in range(tp_size)]
-            dist.all_gather(linear_in_list, linear_in, group=tp_group)
-            linear_in_full = torch.cat(linear_in_list, dim=0)
+            linear_in_full = _gather_lora_factor(linear_in, tp_group)
             lora_weight = lora_scale * (linear_out @ linear_in_full)
 
         elif linear_out.shape[0] * tp_size == base_weight.shape[0]:
-            linear_out_list = [torch.empty_like(linear_out) for _ in range(tp_size)]
-            dist.all_gather(linear_out_list, linear_out, group=tp_group)
-            linear_out_full = torch.cat(linear_out_list, dim=0)
+            linear_out_full = _gather_lora_factor(linear_out, tp_group)
             lora_weight = lora_scale * (linear_out_full @ linear_in)
 
         else:

@@ -71,7 +71,7 @@ classifiers = [
     "Topic :: Utilities",
 ]
 dependencies = [
-    "transformers>=5.12.1",  # glm-5.x: GLM-5.3 KDA fix lives on transformers main (3f601734), newer than any release cap
+    "transformers>=5.12.1,<=5.17.0",  # glm-5.x: GLM-5.3 KDA fix lives on transformers main (3f601734), newer than any release cap
     "mistral-common>=1.10.0",
     "peft>=0.18.1",
     "datasets>=2.20.0",

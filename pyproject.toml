@@ -99,7 +99,6 @@ dependencies = [
     "comet-ml>=3.50.0",
     "torch>=2.6.0",
     "flashinfer-python>=0.6.18",  # glm-5.x: sglang fork pins flashinfer_python[cu13]==0.6.18; flashinfer-python itself keeps cubin in lockstep
-    "flashinfer-cubin>=0.6.18",
     "fast-hadamard-transform>=1.1.0",
 ]
 
@@ -199,6 +198,10 @@ flashinfer-python = { index = "flashinfer" }
 flashinfer-cubin = { index = "flashinfer" }
 
 [project.optional-dependencies]
+# glm-5.x: precompiled flashinfer kernels are optional — 6.4 GB unpacked; flashinfer-python JITs
+# them on the node otherwise (the sglang fork of this stack pins flashinfer_python without cubin).
+cubin = ["flashinfer-cubin>=0.6.18"]
+
 recipes = [
     "nemo-run",
 ]

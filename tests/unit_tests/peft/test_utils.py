@@ -913,6 +913,56 @@ class TestParallelLinearAdapter:
         mock_linear_in.sharded_state_dict.assert_called_once_with("adapter.linear_in.", (), None)
         mock_linear_out.sharded_state_dict.assert_called_once_with("adapter.linear_out.", (), None)
 
+    @patch("megatron.bridge.peft.utils.ColumnParallelLinear")
+    @patch("megatron.bridge.peft.utils.RowParallelLinear")
+    def test_parallel_linear_adapter_sharded_state_dict_output_split(self, mock_row_linear, mock_col_linear, mock_config):
+        """GDN-family in_proj B rows are checkpointed per section, not as one contiguous TP shard."""
+        mock_linear_in = Mock()
+        mock_linear_out = Mock()
+        linear_out_weight = torch.arange(10, dtype=torch.float32).reshape(5, 2)
+        mock_linear_in.sharded_state_dict.return_value = {}
+        mock_linear_out.sharded_state_dict.return_value = {
+            "adapter.linear_out.weight": ShardedTensor.from_rank_offsets(
+                "adapter.linear_out.weight", linear_out_weight, (0, 1, 2)
+            )
+        }
+        mock_col_linear.side_effect = [mock_linear_in, mock_linear_out]
+
+        adapter = ParallelLinearAdapter(
+            in_features=20, out_features=10, dim=16, base_linear_name="in_proj", model_parallel_config=mock_config
+        )
+        result = adapter.sharded_state_dict(
+            prefix="adapter.", output_split=((2, 2, 1), ("query", "key", "value"))
+        )
+
+        factory = result["adapter.linear_out.weight"]
+        assert isinstance(factory, ShardedTensorFactory)
+        chunks = factory.build_fn(factory.key, factory.data, factory.replica_id, None)
+        assert [c.key for c in chunks] == [f"adapter.linear_out.weight.{n}" for n in ("query", "key", "value")]
+        assert [tuple(c.global_shape) for c in chunks] == [(4, 2), (4, 2), (2, 2)]
+        assert [tuple(c.global_offset) for c in chunks] == [(2, 0), (2, 0), (1, 0)]
+        torch.testing.assert_close(torch.cat([c.data for c in chunks]), linear_out_weight)
+
+    @patch("megatron.bridge.peft.utils.ColumnParallelLinear")
+    @patch("megatron.bridge.peft.utils.RowParallelLinear")
+    def test_parallel_linear_adapter_output_split_rejects_mismatched_rows(
+        self, mock_row_linear, mock_col_linear, mock_config
+    ):
+        """A section layout that does not cover the local B rows is an error, not a silent reshard."""
+        mock_linear_in = Mock()
+        mock_linear_out = Mock()
+        mock_linear_in.sharded_state_dict.return_value = {}
+        mock_linear_out.sharded_state_dict.return_value = {
+            "adapter.linear_out.weight": ShardedTensor.from_rank_offsets("adapter.linear_out.weight", torch.zeros(5, 2))
+        }
+        mock_col_linear.side_effect = [mock_linear_in, mock_linear_out]
+
+        adapter = ParallelLinearAdapter(
+            in_features=20, out_features=10, dim=16, base_linear_name="in_proj", model_parallel_config=mock_config
+        )
+        with pytest.raises(ValueError, match="local rows"):
+            adapter.sharded_state_dict(prefix="adapter.", output_split=((2, 2), ("query", "key")))
+
     @patch("megatron.bridge.peft.utils.apply_swiglu_sharded_factory")
     @patch("megatron.bridge.peft.utils.ColumnParallelLinear")
     @patch("megatron.bridge.peft.utils.RowParallelLinear")

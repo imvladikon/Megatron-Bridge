@@ -1590,6 +1590,7 @@ class ParallelLinearAdapter(nn.Module):
         sharded_offsets: Tuple = (),
         metadata: Optional[Dict] = None,
         mamba_dim_info: Optional[Dict] = None,
+        output_split: Optional[Tuple[Tuple[int, ...], Tuple[str, ...]]] = None,
     ) -> ShardedStateDict:
         """Create sharded state dictionary for distributed checkpointing.
 
@@ -1600,6 +1601,9 @@ class ParallelLinearAdapter(nn.Module):
             prefix: Prefix for parameter names.
             sharded_offsets: Offsets for sharded parameters.
             metadata: Additional metadata for sharding.
+            mamba_dim_info: Local Mamba in_proj dimensions used to split linear_out.weight.
+            output_split: Local ``(sections, names)`` of a fused base projection whose TP shard holds
+                part of every section (GDN-family in_proj); linear_out.weight is split likewise.
 
         Returns:
             Sharded state dictionary for distributed checkpointing.
@@ -1669,6 +1673,19 @@ class ParallelLinearAdapter(nn.Module):
                             ["z", "x", "B", "C", "dt"],
                             0,  # split along dimension 0
                         )
+
+        # Each TP rank's B rows follow the base layout [section_0 shard | section_1 shard | ...], so a
+        # contiguous TP split would map the rows to other sections when the checkpoint is resharded.
+        if output_split is not None:
+            from megatron.core.ssm.utils import _split_tensor_factory
+
+            sections, names = output_split
+            key = f"{prefix}linear_out.weight"
+            value = linear_out_sd.get(key)
+            if isinstance(value, ShardedTensor):
+                if value.data.size(0) != sum(sections):
+                    raise ValueError(f"{key} has {value.data.size(0)} local rows, expected sections {sections}")
+                linear_out_sd[key] = _split_tensor_factory(value, list(sections), list(names), 0)
 
         if self.is_expert:
             self._set_expert_replica_ids(linear_in_sd, linear_out_sd)

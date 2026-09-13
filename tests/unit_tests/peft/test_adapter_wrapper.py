@@ -310,6 +310,21 @@ class TestAdapterWrapper:
         mock_dim.assert_called_once_with(mock_linear_simple)
         adapter.sharded_state_dict.assert_called_once_with("test_adapter.", (), None, mamba_dim_info={"dummy": 1})
 
+    def test_sharded_state_dict_passes_output_split_for_tagged_base(self, mock_linear_simple):
+        """Test that a base linear tagged with lora_output_split forwards the section layout."""
+        mock_linear_simple.sharded_state_dict = Mock(return_value={"linear_shard": "value1"})
+        mock_linear_simple.lora_output_split = ((4, 4, 8), ("query", "key", "value"))
+        adapter = MockParallelLinearAdapter("decoder.layers.0.self_attention.in_proj")
+        adapter.sharded_state_dict = Mock(return_value={"adapter_shard": "value2"})
+
+        with patch("megatron.bridge.peft.adapter_wrapper.ParallelLinearAdapter", MockParallelLinearAdapter):
+            wrapper = ConcreteAdapterWrapper(mock_linear_simple, adapter)
+            wrapper.sharded_state_dict(prefix="test_")
+
+        adapter.sharded_state_dict.assert_called_once_with(
+            "test_adapter.", (), None, output_split=((4, 4, 8), ("query", "key", "value"))
+        )
+
     def test_forward_integration(self, mock_linear_simple, simple_adapter):
         """Test full forward pass integration."""
         wrapper = ConcreteAdapterWrapper(mock_linear_simple, simple_adapter)

@@ -257,6 +257,25 @@ class TestLoRA:
         assert isinstance(transformed_model.embedding, nn.Embedding)
         assert isinstance(transformed_model.layernorm, nn.LayerNorm)
 
+    def test_lora_tags_gdn_in_proj_output_sections(self):
+        """GDN-family layers tag in_proj so its adapter B matrix is checkpointed per output section."""
+
+        class GDNLike(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.in_proj_split_sections = (4, 4, 8)
+                self.in_proj_split_names = ["query", "key", "value"]
+                self.in_proj = nn.Linear(8, 16)
+                self.out_proj = nn.Linear(8, 8)
+
+        model = nn.Sequential(GDNLike())
+        transformed = LoRA(target_modules=["in_proj"], dim=4)(model, training=True)
+
+        in_proj = transformed[0].in_proj
+        assert isinstance(in_proj, LoRALinear)
+        assert in_proj.to_wrap.lora_output_split == ((4, 4, 8), ("query", "key", "value"))
+        assert not hasattr(transformed[0].out_proj, "lora_output_split")
+
     def test_lora_transform_with_exclude_modules(self):
         """Test LoRA transformation with exclude_modules parameter."""
         model = SimpleModel()

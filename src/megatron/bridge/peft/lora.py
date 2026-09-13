@@ -168,6 +168,12 @@ class LoRA(PEFT, ModuleMatcher):
         Returns:
             nn.Module: The modified module with LoRA applied, or the original module if not a target.
         """
+        # GDN-family layers shard every in_proj output section per TP rank. The walk visits the layer
+        # before its children, so tag in_proj here for the adapter checkpoint split.
+        in_proj_split_sections = getattr(module, "in_proj_split_sections", None)
+        if in_proj_split_sections is not None and isinstance(getattr(module, "in_proj", None), nn.Module):
+            module.in_proj.lora_output_split = (tuple(in_proj_split_sections), tuple(module.in_proj_split_names))
+
         # Skip already transformed modules
         adapter_types = (LoRALinear, LoRATopKRouter)
         if isinstance(module, adapter_types):

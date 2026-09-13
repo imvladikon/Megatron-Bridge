@@ -251,6 +251,10 @@ class AdapterWrapper(nn.Module):
         adapter_sharded_state_dict_kwargs = {}
         if isinstance(self.adapter, ParallelLinearAdapter) and "mixer.in_proj" in self.adapter.base_linear_name:
             adapter_sharded_state_dict_kwargs["mamba_dim_info"] = _compute_mamba_dim_info(self.to_wrap)
+        elif isinstance(self.adapter, ParallelLinearAdapter) and isinstance(
+            output_split := getattr(self.to_wrap, "lora_output_split", None), tuple
+        ):
+            adapter_sharded_state_dict_kwargs["output_split"] = output_split
 
         sharded_state_dict = {}
         # The wrapped module may be a plain nn.Linear (simple, non-parallel path) that

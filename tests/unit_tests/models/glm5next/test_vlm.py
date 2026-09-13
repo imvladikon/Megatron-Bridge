@@ -152,6 +152,26 @@ def _provider():
     return config
 
 
+def _language_only_source(**flags):
+    source = json.loads((Path(__file__).parent / "fixtures/flash_tiny.json").read_text())
+    source["text_config"].update(num_nextn_predict_layers=0)
+    source.update(image_token_id=3, video_start_token_id=4, video_end_token_id=5, **flags)
+    # Surgery checkpoints keep a depth-0 placeholder tower narrower than the decoder.
+    source["vision_config"].update(depth=0, hidden_size=32, out_hidden_size=32)
+    return source
+
+
+@pytest.mark.parametrize("flags", [{"language_only": True}, {"vision_disabled": True}])
+def test_language_only_checkpoint_accepts_placeholder_vision_width(flags):
+    config = GLM53FlashModelProvider.from_hf_config(_language_only_source(**flags))
+    assert config.language_only and config.vision_config["out_hidden_size"] == 32 != config.hidden_size
+
+
+def test_vlm_checkpoint_still_rejects_mismatched_vision_width():
+    with pytest.raises(ValueError, match="vision output width"):
+        GLM53FlashModelProvider.from_hf_config(_language_only_source())
+
+
 def _model(config, groups, *, pre_process=True):
     # Only the language decoder is a capture module. The wrapper constructor
     # and its HF vision tower are real, including dtype and TP metadata setup.
@@ -226,6 +246,15 @@ def test_real_vision_wrapper_matches_hf_helpers_and_gradients(cp_size, cp_rank):
     for actual, reference in zip(got, wanted, strict=True):
         torch.testing.assert_close(actual, reference, rtol=5e-5, atol=3e-5)
     assert not torch.cuda.is_initialized()
+
+
+def test_language_only_wrapper_rejects_media_before_vision():
+    config = _provider()
+    config.language_only = True
+    model = _model(config, SimpleNamespace(cp=None, tp=None, pp=None))
+    model.visual = None  # any access to the tower would fail loudly
+    with pytest.raises(ValueError, match="language-only"):
+        model(input_ids=torch.tensor([[3, 1]]), pixel_values=torch.zeros(1, 12))
 
 
 def test_non_preprocess_stage_does_not_access_vision_or_unbound_inputs():

@@ -221,6 +221,7 @@ class GLM53FlashModelProvider(GLM53FlashTextModelProvider):
     freeze_language_model: bool = False
     freeze_vision_model: bool = False
     freeze_vision_projection: bool = False
+    language_only: bool = False
 
     @classmethod
     def from_hf_config(cls, hf_config: Mapping[str, Any]) -> Self:
@@ -229,7 +230,10 @@ class GLM53FlashModelProvider(GLM53FlashTextModelProvider):
             raise ValueError("Flash VLM provider requires glm5_next with vision_config")
         provider = super().from_hf_config(hf_config)
         provider.vision_config = deepcopy(dict(hf_config["vision_config"]))
-        if provider.vision_config.get("out_hidden_size") != provider.hidden_size:
+        # Language-only checkpoints keep a placeholder vision stub whose width never feeds the decoder;
+        # the stub and its weights are preserved for exact HF round trips, media inputs are rejected.
+        provider.language_only = bool(hf_config.get("language_only") or hf_config.get("vision_disabled"))
+        if not provider.language_only and provider.vision_config.get("out_hidden_size") != provider.hidden_size:
             raise ValueError("Flash vision output width must match language hidden_size")
         for name in ("image_token_id", "video_start_token_id", "video_end_token_id"):
             value = hf_config.get(name)

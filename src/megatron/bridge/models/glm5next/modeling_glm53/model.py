@@ -124,6 +124,8 @@ class GLM53FlashModel(MegatronModule):
         supported. Flash uses NoPE, so position IDs do not affect embeddings.
         """
         has_vision = pixel_values is not None or pixel_values_videos is not None
+        if has_vision and self.config.language_only:
+            raise ValueError("Flash language-only checkpoint does not accept image or video inputs")
         if packed_seq_params is not None and packed_seq_params.cp_group not in (None, self.pg_collection.cp):
             raise NotImplementedError("Flash wrapper does not yet support changing its CP group per microbatch")
         if self.pre_process and input_ids is None:

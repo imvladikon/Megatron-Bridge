@@ -71,6 +71,20 @@ def test_export_rejects_geometry_override_and_unimplemented_mtp():
         bridge.megatron_to_hf_config(provider)
 
 
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [("kda_lower_bound", -3.0), ("moe_router_topk_scaling_factor", 1.0), ("dsa_indexer_topk", 4)],
+)
+def test_export_rejects_math_override_kept_out_of_hf_config(name, value):
+    bridge, config = _bridge()
+    provider = bridge.provider_bridge(SimpleNamespace(config=config))
+    provider.mtp_num_layers = 0
+    assert getattr(provider, name) != value
+    setattr(provider, name, value)
+    with pytest.raises(ValueError, match=name):
+        bridge.megatron_to_hf_config(provider)
+
+
 def test_raw_quantized_sources_never_become_unscaled_floating_weights():
     bridge, _ = _bridge()
     weight = torch.arange(8).float().reshape(2, 4)

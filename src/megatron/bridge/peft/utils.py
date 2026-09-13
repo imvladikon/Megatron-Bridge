@@ -37,7 +37,11 @@ from megatron.core.tensor_parallel.mappings import (
     gather_from_sequence_parallel_region,
     scatter_to_sequence_parallel_region,
 )
-from megatron.core.tensor_parallel.random import is_checkpointing
+from megatron.core.tensor_parallel.random import (
+    get_cuda_rng_tracker,
+    get_expert_parallel_rng_tracker_name,
+    is_checkpointing,
+)
 from megatron.core.transformer.mlp import apply_swiglu_sharded_factory
 from megatron.core.transformer.module import MegatronModule
 from megatron.core.transformer.moe.router import TopKRouter
@@ -1981,8 +1985,18 @@ class GroupedExpertLinearAdapter(nn.Module):
 
         linear_in_weight = torch.empty(linear_in_shape, device=params_device, dtype=dtype)
         linear_out_weight = torch.empty(linear_out_shape, device=params_device, dtype=dtype)
-        ParallelLinearAdapter._get_init_fn(self, column_init_method)(linear_in_weight)
-        ParallelLinearAdapter._get_init_fn(self, row_init_method)(linear_out_weight)
+        # Match per-expert ParallelLinearAdapter init: full 2D fans, so torch does not fold the local expert
+        # count into the 3D fan, and the expert RNG stream, so EP ranks do not draw identical experts.
+        init_rng = nullcontext()
+        if params_device.type == "cuda" and get_expert_parallel_rng_tracker_name() in get_cuda_rng_tracker().get_states():
+            init_rng = get_cuda_rng_tracker().fork(get_expert_parallel_rng_tracker_name())
+        with init_rng:
+            ParallelLinearAdapter._get_init_fn(self, column_init_method, fan_in=in_features, fan_out=dim)(
+                linear_in_weight
+            )
+            ParallelLinearAdapter._get_init_fn(self, row_init_method, fan_in=dim, fan_out=out_features)(
+                linear_out_weight
+            )
 
         use_expert_process_groups = (
             _process_group_size(

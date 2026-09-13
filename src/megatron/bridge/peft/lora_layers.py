@@ -38,6 +38,12 @@ class LoRALinear(AdapterWrapper):
         base_weight = self.to_wrap.weight
         if not self._adapter_enabled:
             return base_weight
+        dropout = getattr(self.adapter, "dropout", None)
+        if isinstance(dropout, nn.Dropout) and dropout.p > 0 and self.training and torch.is_grad_enabled():
+            raise NotImplementedError(
+                "LoRA dropout on the input cannot be expressed in an effective weight; "
+                "set dropout=0 for projections consumed through .weight (e.g. absorbed MLA linear_kv_up_proj)"
+            )
 
         linear_in_weight = self.adapter.linear_in.weight
         linear_out_weight = self.adapter.linear_out.weight

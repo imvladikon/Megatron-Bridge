@@ -1467,6 +1467,25 @@ class TestParallelLinearAdapter:
 class TestGroupedExpertLinearAdapter:
     """Tests for grouped-expert per-expert LoRA adapters."""
 
+    @pytest.mark.parametrize("num_local_experts", [1, 4, 64])
+    def test_grouped_expert_xavier_scale_ignores_local_expert_count(self, num_local_experts):
+        """Per-expert LoRA A uses the 2D xavier scale, independent of how many experts live on the rank."""
+        torch.manual_seed(0)
+        adapter = GroupedExpertLinearAdapter(
+            in_features=256,
+            out_features=128,
+            dim=16,
+            num_local_experts=num_local_experts,
+            base_linear_name="decoder.layers.0.mlp.experts.linear_fc1",
+            activation="identity",
+            column_init_method="xavier",
+            model_parallel_config=MockModelParallelConfig(),
+        )
+        expected_std = math.sqrt(2.0 / (256 + 16))
+        assert adapter.linear_in.weight.shape == (num_local_experts, 16, 256)
+        assert abs(adapter.linear_in.weight.float().std().item() / expected_std - 1) < 0.05
+        assert torch.count_nonzero(adapter.linear_out.weight) == 0
+
     @pytest.mark.parametrize("split_kwarg", ["m_splits", "tokens_per_expert"])
     def test_grouped_expert_linear_adapter_accepts_tensor_split_kwargs(self, split_kwarg):
         """Tensor-valued split kwargs should not trigger ambiguous truth-value errors."""

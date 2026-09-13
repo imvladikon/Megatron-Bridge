@@ -156,6 +156,23 @@ class TestLoRALinear:
 
         assert torch.allclose(lora_linear.weight, expected_weight)
 
+    def test_lora_linear_weight_rejects_training_dropout(self):
+        """Input dropout has no effective-weight form: reading .weight while training with dropout must fail."""
+        base = MockLinearWithTupleReturn(in_features=3, out_features=2)
+        adapter = MockLoRAAdapter(in_features=3, out_features=2, dim=2, alpha=4)
+        adapter.dropout = nn.Dropout(0.25)
+        lora_linear = LoRALinear(base, adapter)
+
+        with pytest.raises(NotImplementedError, match="dropout"):
+            lora_linear.weight
+        with torch.no_grad():
+            assert lora_linear.weight.shape == base.weight.shape
+        lora_linear.eval()
+        assert lora_linear.weight.shape == base.weight.shape
+        adapter.dropout = nn.Dropout(0.0)
+        lora_linear.train()
+        assert lora_linear.weight.shape == base.weight.shape
+
     def test_lora_linear_weight_returns_base_weight_when_disabled(self):
         """Test that disabled adapters expose the original base weight."""
         base = MockLinearWithTupleReturn(in_features=3, out_features=2)

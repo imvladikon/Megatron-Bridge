@@ -165,7 +165,15 @@ class GLM53FlashBridge(MegatronModelBridge):
                 scale_inv = hf_state_dict.get(name + "_scale_inv")
                 if scale_inv is None:
                     raise NotImplementedError(f"Flash FP8 weight without block scale: {name}")
-                return quantization_utils.maybe_dequantize_fp8_blockwise(weight, scale_inv)
+                block = quantization_utils.FP8_BLOCK_SIZE
+                expected = tuple(-(-size // block) for size in weight.shape)
+                # maybe_dequantize_fp8_blockwise silently falls back to an unscaled cast for non-2D weights.
+                if weight.ndim != 2 or tuple(scale_inv.shape) != expected:
+                    raise NotImplementedError(
+                        f"Flash FP8 weight {name} {tuple(weight.shape)} does not match {block}x{block} block scales "
+                        f"{tuple(scale_inv.shape)}"
+                    )
+                return quantization_utils.dequantize_fp8_blockwise(weight, scale_inv)
             if weight.dtype not in (torch.float16, torch.bfloat16, torch.float32, torch.float64):
                 raise NotImplementedError(f"Flash quantized checkpoint import needs scale-aware loading: {name}")
             return weight

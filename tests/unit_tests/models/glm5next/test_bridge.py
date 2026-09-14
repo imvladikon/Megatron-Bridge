@@ -90,8 +90,28 @@ def test_raw_quantized_sources_never_become_unscaled_floating_weights():
     weight = torch.arange(8).float().reshape(2, 4)
     assert bridge.maybe_modify_loaded_hf_weight("weight", {"weight": weight}) is weight
     assert bridge.maybe_modify_loaded_hf_weight({"q": "weight"}, {"weight": weight})["q"] is weight
+    fp8 = weight.to(torch.float8_e4m3fn)
+    with pytest.raises(NotImplementedError, match="without block scale"):
+        bridge.maybe_modify_loaded_hf_weight("weight", {"weight": fp8})
+    with pytest.raises(NotImplementedError, match="block scales"):
+        bridge.maybe_modify_loaded_hf_weight("weight", {"weight": fp8, "weight_scale_inv": torch.ones(2, 2)})
+    with pytest.raises(NotImplementedError, match="block scales"):
+        bridge.maybe_modify_loaded_hf_weight("w", {"w": fp8.reshape(2, 2, 2), "w_scale_inv": torch.ones(1, 1)})
     with pytest.raises(NotImplementedError, match="scale-aware"):
-        bridge.maybe_modify_loaded_hf_weight("weight", {"weight": weight.to(torch.float8_e4m3fn)})
+        bridge.maybe_modify_loaded_hf_weight("weight", {"weight": weight.to(torch.int8)})
+
+
+def test_block_fp8_sources_dequantize_per_block_scale():
+    bridge, _ = _bridge()
+    torch.manual_seed(0)
+    reference = torch.randn(300, 200)
+    scale = torch.rand(3, 2) + 0.5
+    blocks = torch.repeat_interleave(torch.repeat_interleave(scale, 128, dim=0), 128, dim=1)[:300, :200]
+    fp8 = (reference / blocks).clamp(-1, 1).mul(100).to(torch.float8_e4m3fn)
+    state = {"model.layers.0.mlp.experts.0.up_proj.weight": fp8, "model.layers.0.mlp.experts.0.up_proj.weight_scale_inv": scale}
+    loaded = bridge.maybe_modify_loaded_hf_weight({"up": "model.layers.0.mlp.experts.0.up_proj.weight"}, state)["up"]
+    assert loaded.dtype == torch.bfloat16 and loaded.shape == (300, 200)
+    torch.testing.assert_close(loaded, (fp8.float() * blocks).to(torch.bfloat16))
 
 
 @pytest.mark.parametrize("pad_token", [-1, True, 154880])

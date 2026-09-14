@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 import torch
 
+from megatron.bridge.models.conversion import quantization_utils
 from megatron.bridge.models.conversion.mapping_registry import MegatronMappingRegistry
 from megatron.bridge.models.conversion.model_bridge import MegatronModelBridge
 from megatron.bridge.models.glm5next.config_adapter import parse_flash_config
@@ -149,10 +150,22 @@ class GLM53FlashBridge(MegatronModelBridge):
     def maybe_modify_loaded_hf_weight(
         self, hf_param: str | dict[str, str], hf_state_dict: Mapping[str, torch.Tensor]
     ) -> torch.Tensor | dict[str, torch.Tensor]:
-        """Load one mapping; reject raw quantized weights before any TP cast."""
+        """Load one mapping; dequantize block-scaled FP8 weights, reject other quantized dtypes.
+
+        The released GLM-5.3-Flash checkpoint stores expert/MLP/MLA projections as FP8 E4M3 with a
+        companion ``<name>_scale_inv`` block-scale tensor (128x128). The generic loader ships the
+        companion in ``hf_state_dict`` (see ``model_bridge`` companion handling), so the weight is
+        dequantized to bf16 here, before any TP cast, exactly like ``GLM5Bridge._maybe_dequantize_fp8``.
+        Weights listed in ``modules_to_not_convert`` arrive as bf16 and pass through unchanged.
+        """
 
         def load(name: str) -> torch.Tensor:
             weight = hf_state_dict[name]
+            if quantization_utils.is_fp8_tensor(weight):
+                scale_inv = hf_state_dict.get(name + "_scale_inv")
+                if scale_inv is None:
+                    raise NotImplementedError(f"Flash FP8 weight without block scale: {name}")
+                return quantization_utils.maybe_dequantize_fp8_blockwise(weight, scale_inv)
             if weight.dtype not in (torch.float16, torch.bfloat16, torch.float32, torch.float64):
                 raise NotImplementedError(f"Flash quantized checkpoint import needs scale-aware loading: {name}")
             return weight

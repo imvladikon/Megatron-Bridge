@@ -423,6 +423,47 @@ def create_peft_hook(
     return hook
 
 
+def summarize_adapter_parameters(model: ModelList | MegatronModule, peft: object) -> Dict[str, float]:
+    """Count the adapter parameters a model holds and measure their L2 norms.
+
+    Adapter checkpoints load with ``strict=False``, which is free to match nothing and raise
+    nothing. ``lora_B`` is zero at initialization, so its norm is what separates "the checkpoint
+    landed in the weights" from "no key matched and no error was reported".
+
+    Args:
+        model: Model chunks to inspect.
+        peft: PEFT config whose ``adapter_key_filter`` decides which parameters are adapter ones.
+
+    Returns:
+        A count and an L2 norm for ``lora_a``, ``lora_b`` and any remaining adapter parameters,
+        plus ``count`` and ``norm`` over all of them.
+    """
+    groups = ("lora_a", "lora_b", "other")
+    counts = dict.fromkeys(groups, 0)
+    squares = dict.fromkeys(groups, 0.0)
+    key_filter = getattr(peft, "adapter_key_filter", None)
+    for model_chunk in _ensure_model_list(model):
+        for name, parameter in model_chunk.named_parameters():
+            if key_filter is not None and not key_filter(name):
+                continue
+            lowered = name.lower()
+            if "linear_in" in lowered or "lora_a" in lowered:
+                group = "lora_a"
+            elif "linear_out" in lowered or "lora_b" in lowered:
+                group = "lora_b"
+            else:
+                group = "other"
+            counts[group] += 1
+            squares[group] += float(parameter.detach().float().pow(2).sum())
+    report: Dict[str, float] = {}
+    for group in groups:
+        report[f"{group}_count"] = counts[group]
+        report[f"{group}_norm"] = math.sqrt(squares[group])
+    report["count"] = sum(counts.values())
+    report["norm"] = math.sqrt(sum(squares.values()))
+    return report
+
+
 def load_peft_adapter_checkpoint(
     model: ModelList | MegatronModule,
     adapter_checkpoint_path: CheckpointPath,
@@ -463,6 +504,9 @@ def load_peft_adapter_checkpoint(
             load_strategy = FullyParallelLoadStrategyWrapper(load_strategy, dp_cp_group)
 
     loaded_state_dict = dist_checkpointing.load(sharded_state_dict, checkpoint_path, load_strategy)
+    before = summarize_adapter_parameters(model_chunks, peft)
+    applied_keys = 0
+    checkpoint_keys = 0
     for vpp_rank, model_chunk in enumerate(model_chunks):
         model_key = "model" if len(model_chunks) == 1 else f"model{vpp_rank}"
         if model_key not in loaded_state_dict:
@@ -483,7 +527,35 @@ def load_peft_adapter_checkpoint(
                     f"(expected keys: {expected_model_keys}), "
                     f"but found keys: {list(loaded_state_dict.keys())}"
                 )
-        model_chunk.load_state_dict(loaded_state_dict[model_key], strict=strict)
+        chunk_state_dict = loaded_state_dict[model_key]
+        incompatible = model_chunk.load_state_dict(chunk_state_dict, strict=strict)
+        unexpected = getattr(incompatible, "unexpected_keys", None) or ()
+        checkpoint_keys += len(chunk_state_dict)
+        applied_keys += len(chunk_state_dict) - len(unexpected)
+
+    after = summarize_adapter_parameters(model_chunks, peft)
+    logger.info(
+        "PEFT adapter load from %s: %d of %d checkpoint keys applied to %d adapter parameters; "
+        "norm %.6g -> %.6g (lora_A %.6g -> %.6g, lora_B %.6g -> %.6g)",
+        checkpoint_path,
+        applied_keys,
+        checkpoint_keys,
+        after["count"],
+        before["norm"],
+        after["norm"],
+        before["lora_a_norm"],
+        after["lora_a_norm"],
+        before["lora_b_norm"],
+        after["lora_b_norm"],
+    )
+    # A model that carries adapters but took nothing from the checkpoint is the failure strict=False
+    # is free to hide: training would silently continue from the initialization instead.
+    if after["count"] > 0 and applied_keys == 0:
+        raise RuntimeError(
+            f"Adapter checkpoint {checkpoint_path} applied no parameters to a model holding "
+            f"{int(after['count'])} adapter parameters. The checkpoint and the model disagree on "
+            "parameter names; loading it would leave the adapters at their initial values."
+        )
 
 
 def _apply_peft(peft: object, model: ModelList, training: bool = True) -> ModelList:

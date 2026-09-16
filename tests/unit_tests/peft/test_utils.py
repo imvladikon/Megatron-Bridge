@@ -2895,6 +2895,16 @@ class TestGroupedExpertLinearAdapter:
 class _FakeModel:
     """Fake model chunk for PEFT checkpoint helper tests."""
 
+    def __init__(self, unexpected_keys: list[str] | None = None) -> None:
+        self.unexpected_keys = list(unexpected_keys or [])
+        # linear_out is zero the way a freshly initialized lora_B is, which is what makes an
+        # unloaded adapter distinguishable from a loaded one.
+        self.parameters_by_name = {
+            "adapter.linear_in.weight": torch.tensor([3.0, 4.0]),
+            "adapter.linear_out.weight": torch.zeros(2),
+            "base.weight": torch.tensor([2.0]),
+        }
+
     def sharded_state_dict(self, **kwargs):
         self.kwargs = kwargs
         return {
@@ -2903,9 +2913,13 @@ class _FakeModel:
             "adapter._extra_state": torch.tensor([3.0]),
         }
 
+    def named_parameters(self):
+        return iter(self.parameters_by_name.items())
+
     def load_state_dict(self, state_dict, strict=True):
         self.loaded_state_dict = state_dict
         self.loaded_strict = strict
+        return SimpleNamespace(missing_keys=[], unexpected_keys=list(self.unexpected_keys))
 
 
 class _FakePeft:
@@ -3047,6 +3061,44 @@ def test_load_peft_adapter_checkpoint_filters_and_loads(monkeypatch) -> None:
     assert calls["load_strategy"] == "strategy"
     assert torch.equal(model[0].loaded_state_dict["adapter.weight"], torch.tensor([4.0]))
     assert model[0].loaded_strict is False
+
+
+def test_summarize_adapter_parameters_separates_lora_a_from_lora_b() -> None:
+    report = peft_utils.summarize_adapter_parameters([_FakeModel()], _FakePeft())
+
+    assert report["count"] == 2, "base.weight is not an adapter parameter and must be excluded"
+    assert report["lora_a_count"] == 1
+    assert report["lora_a_norm"] == pytest.approx(5.0)
+    # A freshly initialized lora_B is zero; that is the signal a load is supposed to change.
+    assert report["lora_b_count"] == 1
+    assert report["lora_b_norm"] == pytest.approx(0.0)
+    assert report["norm"] == pytest.approx(5.0)
+
+
+def test_load_peft_adapter_checkpoint_raises_when_no_key_is_applied(monkeypatch) -> None:
+    # Every checkpoint key comes back unexpected, so the adapters keep their initial values.
+    model = [_FakeModel(unexpected_keys=["adapter.weight"])]
+    peft = _FakePeft()
+
+    _patch_checkpointing(
+        monkeypatch,
+        lambda model, model_sd_kwargs, ckpt_format, pg_collection=None: {"model": model[0].sharded_state_dict()},
+        lambda state_dict, peft: state_dict,
+    )
+    monkeypatch.setattr(
+        "megatron.core.dist_checkpointing.load",
+        lambda sharded_state_dict, checkpoint_path, load_strategy: {"model": {"adapter.weight": torch.tensor([4.0])}},
+    )
+
+    with pytest.raises(RuntimeError, match="applied no parameters"):
+        peft_utils.load_peft_adapter_checkpoint(
+            model,
+            "/adapter",
+            peft=peft,
+            strict=False,
+            fully_parallel_load=False,
+            load_strategy="strategy",
+        )
 
 
 def test_load_peft_adapter_checkpoint_builds_default_parallel_strategy(monkeypatch) -> None:
